@@ -1,40 +1,54 @@
-from collections.abc import Generator
-import os
-import tempfile
+import asyncio
 import io
-import markdown
-import re
-from docx import Document
-from docx.shared import Pt, Inches, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml.ns import qn
-from typing import Any, List, Dict, Tuple
-import html
-from bs4 import BeautifulSoup, NavigableString, Tag
+import json
+import os
+import time
+import uuid
+from collections.abc import Generator
+from typing import Any
 
+import markdown
+from bs4 import BeautifulSoup, NavigableString, Tag
 from dify_plugin import Tool
 from dify_plugin.entities.tool import ToolInvokeMessage
+from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_PARAGRAPH_ALIGNMENT
+from docx.oxml.ns import qn
+from docx.shared import Pt, Inches, RGBColor
+from pyecharts import options
+from pyecharts.charts import Bar, Line, Pie  # 根据需要导入其他图表类型
+from pyecharts.render import make_snapshot
+from snapshot_selenium import snapshot
+
 
 class DocTool(Tool):
+    from pyecharts.globals import CurrentConfig
+    from pathlib import Path
+    CurrentConfig.ONLINE_HOST = str(Path.cwd()) + "/_assets/"  # 指向本地JS目录
+
+
     def _invoke(self, tool_parameters: dict[str, Any]) -> Generator[ToolInvokeMessage]:
         md_content = tool_parameters.get("markdown_content", "")
         title = tool_parameters.get("title", "Document")
-        
+
         if not md_content:
             yield self.create_text_message("No markdown content provided.")
             return
-        
+
         try:
             # 只去除“↓”，保留“•”
             md_content = md_content.replace("↓", "")
-            
+
+            # yield self.create_text_message(f"Document '{title}' being generated...")
+
             doc = self._convert_markdown_to_docx(md_content, title)
             docx_bytes = io.BytesIO()
             doc.save(docx_bytes)
             docx_bytes.seek(0)
+
             file_bytes = docx_bytes.getvalue()
             filename = f"{title.replace(' ', '_')}.docx"
-            
+
             yield self.create_text_message(f"Document '{title}' generated successfully")
             yield self.create_blob_message(
                 blob=file_bytes,
@@ -48,7 +62,7 @@ class DocTool(Tool):
 
     def _convert_markdown_to_docx(self, md_content: str, title: str) -> Document:
         doc = Document()
-        
+
         # --- 标题部分 ---
         title_paragraph = doc.add_paragraph()
         title_run = title_paragraph.add_run(title)
@@ -59,7 +73,13 @@ class DocTool(Tool):
         title_run.font.size = Pt(22)
         title_run.font.color.rgb = RGBColor(0, 0, 0)
         title_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        
+
+        config = {
+            'markdown.extensions.codehilite': {
+                'guess_lang': False,  # 禁用自动检测语言类型
+                'pygments_formatter': CodeHtmlFormatter,
+            }
+        }
         # 转换 Markdown 为 HTML（移除 nl2br 扩展）
         html_content = markdown.markdown(
             md_content,
@@ -69,9 +89,9 @@ class DocTool(Tool):
                 'markdown.extensions.codehilite',
                 # 'markdown.extensions.nl2br',
                 'markdown.extensions.sane_lists'
-            ]
+            ],
+            extension_configs=config
         )
-        
         soup = BeautifulSoup(html_content, 'html.parser')
         self._process_html_elements(doc, soup)
         return doc
@@ -85,7 +105,7 @@ class DocTool(Tool):
             # 跳过 <br> 标签
             if isinstance(element, Tag) and element.name == 'br':
                 continue
-            
+
             # 纯文本节点：只去“↓”
             if isinstance(element, NavigableString):
                 text = str(element).replace("↓", "").strip()
@@ -97,10 +117,10 @@ class DocTool(Tool):
                     run.font.size = Pt(16)
                     run.font.color.rgb = RGBColor(0, 0, 0)
                 continue
-            
+
             if not isinstance(element, Tag):
                 continue
-            
+
             # 处理标题 h1 ~ h6，只去除“↓”
             if element.name == 'h1':
                 heading = doc.add_heading(element.get_text().replace("↓", "").strip(), level=1)
@@ -223,7 +243,7 @@ class DocTool(Tool):
             elif isinstance(child, Tag):
                 # 递归处理其他标签（<span>、<a>、<div> 等）
                 self._add_run_with_formatting(paragraph, child)
-            
+
             # 统一为正文文字格式：仿宋GB_2312，16pt，黑色
             try:
                 run.font.name = '仿宋GB_2312'
@@ -268,6 +288,9 @@ class DocTool(Tool):
         p = doc.add_paragraph()
         p.paragraph_format.first_line_indent = Pt(24)
         if language:
+            if language.strip().__eq__('echarts'):
+                self._add_code_echarts(doc, code)
+                return
             lang_run = p.add_run(f"Language: {language}\n")
             lang_run.italic = True
             lang_run.font.name = '仿宋GB_2312'
@@ -280,6 +303,55 @@ class DocTool(Tool):
         code_run.font.name = 'Courier New'
         code_run.font.size = Pt(9)
         code_run.font.color.rgb = RGBColor(0, 0, 0)
+
+        p.paragraph_format.left_indent = Inches(0.5)
+        p.paragraph_format.right_indent = Inches(0.5)
+
+    def render_chart_to_image(self, json_data):
+        # 解析JSON数据
+        chart_config = json.loads(json_data)
+
+        # 根据series类型创建相应的图表对象
+        series_type = chart_config['series'][0]['type']
+        if series_type == 'bar':
+            chart = Bar()
+        elif series_type == 'line':
+            chart = Line()
+        elif series_type == 'pie':
+            chart = Pie()
+        else:
+            raise ValueError(f"Unsupported chart type: {series_type}")
+
+        chart.options.update(**chart_config)
+
+        name = uuid.uuid4()
+        html_path = f"{name}.html"
+        image_path = f"{name}.png"
+        # 渲染为图片字节流
+        make_snapshot(snapshot, chart.render(html_path), image_path, is_remove_html=True)
+        return image_path
+
+    def _add_code_echarts(self, doc: Document, code: str):
+        """
+        将 echarts 代码块转为图片存储进 Word 中。
+        """
+        p = doc.add_paragraph()
+        # p.paragraph_format.first_line_indent = Pt(24)
+        p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+
+        # 1. 将echarts代码渲染为图片
+        image_path = self.render_chart_to_image(code)
+
+        # 2. 创建Word文档并插入图片
+        run = p.add_run()
+        section = doc.sections[0]  # 获取文档的第一个部分（section）
+        page_width = section.page_width  # 获取页面宽度（单位是磅）
+        left_margin = section.left_margin
+        right_margin = section.right_margin
+        run.add_picture(image_path, width=(page_width - left_margin - right_margin))  # 插入图片
+        run._element.getparent().insert(0, run._element)
+        # doc.add_picture(image_path)  # 插入图片
+        os.remove(image_path)
 
         p.paragraph_format.left_indent = Inches(0.5)
         p.paragraph_format.right_indent = Inches(0.5)
@@ -320,3 +392,19 @@ class DocTool(Tool):
                         for run in para.runs:
                             run.bold = True
                             run.font.color.rgb = RGBColor(0, 0, 0)
+
+
+
+from pygments.formatters.html import HtmlFormatter
+
+
+class CodeHtmlFormatter(HtmlFormatter):
+
+    def __init__(self, lang_str, **options):
+        HtmlFormatter.__init__(self, **options)
+        self.lang_str = lang_str
+
+    def _wrap_code(self, inner):
+        yield 0, f'<code class="{self.lang_str}">'
+        yield from inner
+        yield 0, '</code>'

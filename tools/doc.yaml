@@ -1,11 +1,13 @@
 identity:
   name: markdown_to_docx_converter
-  author: yuos
+  author: taisenki
   label:
     en_US: Markdown to DOCX Converter
     zh_Hans: Markdown转DOCX Pro
     ja_JP: Markdown から DOCX コンバーター
     pt_BR: Conversor de Markdown para DOCX
+  tags: # 标签，用于前端展示
+    - utilities
 description:
   human:
     en_US: Convert Markdown content to a DOCX (Word) document

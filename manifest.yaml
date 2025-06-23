@@ -1,12 +1,12 @@
-version: 0.0.4
+version: 0.0.5
 type: plugin
-author: yuos
-name: docx
+author: taisenki
+name: docx-dw
 label:
-  en_US: DOCX
-  ja_JP: DOCX
-  zh_Hans: DOCX
-  pt_BR: DOCX
+  en_US: DOCX-DW
+  ja_JP: DOCX-DW
+  zh_Hans: DOCX-DW
+  pt_BR: DOCX-DW
 description:
   en_US: Convert Markdown text to Standard official documents DOCX documents
   zh_Hans: 将Markdown文本转换为标准公文DOCX文档
@@ -23,7 +23,7 @@ plugins:
   tools:
     - provider/doc.yaml
 meta:
-  version: 0.0.4
+  version: 0.0.5
   arch:
     - amd64
     - arm64
